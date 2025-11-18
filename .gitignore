@@ -1,0 +1,23 @@
+# Entornos / configuración local
+.env/
+.venv/
+venv/
+env/
+
+# Cachés de Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Archivos de sistema / IDE
+.DS_Store
+.vscode/
+.idea/
+
+# Artefactos de modelos
+artifacts/*.joblib
+artifacts/*.pkl
+
