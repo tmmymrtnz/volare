@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+import sys
 
 import httpx
 import matplotlib.pyplot as plt
@@ -9,6 +10,10 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import streamlit as st
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.append(str(ROOT_DIR))
 
 from volare_model.serving import LocalModelService
 
