@@ -12,10 +12,10 @@ El dataset usado es `dataset/Cleaned_dataset.csv`.
 - **Python 3.11** instalado (por ejemplo vía Homebrew: `brew install python@3.11`).
 - Opcional pero recomendado:
   - Homebrew instalado.
-  - Dependencias nativas para librerías de visualización:
+  - Dependencias nativas para librerías de visualización y cómputo paralelizado:
     ```bash
     xcode-select --install           # Command Line Tools (si no las tenés)
-    brew install pkg-config freetype libpng
+    brew install pkg-config freetype libpng libomp
     ```
 
 ---
@@ -34,7 +34,9 @@ Desde aquí deberían verse, entre otros, estos archivos:
 - `tp3_modelado_vuelos.ipynb`
 - `api/main.py`
 - `frontend/app.py`
+- `volare_model/`
 - `requirements.txt`
+- `reports/`
 
 ---
 
@@ -94,13 +96,21 @@ Podés abrirlo con:
 
 1. Asegurate de que el kernel seleccionado use el Python del venv (`.venv`).  
 2. Ejecutá todas las celdas, en orden, hasta la sección **“1.13 Guardado del modelo para despliegue”**.  
-3. La celda final de esa sección guarda el pipeline en:
+3. La celda final de esa sección guarda el pipeline y las métricas consolidadas en:
 
    ```text
    artifacts/model_pipeline.joblib
+   reports/model_metrics.json
    ```
 
-Si todo salió bien, al finalizar deberías ver el archivo `artifacts/model_pipeline.joblib` creado/actualizado.
+El notebook ahora:
+
+- Ordena el dataset cronológicamente y usa `TimeSeriesSplit` para evaluar sin leakage.
+- Ajusta hiperparámetros con `RandomizedSearchCV` y genera curvas de aprendizaje.
+- Serializa el mejor pipeline (`FeatureGenerator` + `XGBoost` tuneado) y exporta sus métricas.
+- Exporta diagnósticos (bootstrap, MAE por buckets, stress tests) y centraliza métricas en `reports/model_metrics.json`.
+
+Si todo salió bien, al finalizar deberías ver ambos artefactos actualizados (`artifacts/` y `reports/`).
 
 ---
 
@@ -112,35 +122,78 @@ Con el entorno virtual activado y el modelo ya guardado en `artifacts/model_pipe
 streamlit run frontend/app.py
 ```
 
-Streamlit abrirá la app en el navegador (por defecto `http://localhost:8501`).
+Streamlit abrirá la app en el navegador (por defecto `http://localhost:8501`). Desde la barra lateral podés elegir el modo de inferencia:
 
-La app tiene tres pestañas:
+- **Pipeline local**: llama al modelo cargado desde `artifacts/model_pipeline.joblib`.
+- **API FastAPI**: envía los payloads a `POST /predict` (URL configurable).
 
-1. **Predicción**  
-   - Inputs mínimos: fecha del vuelo, origen, destino, clase.  
-   - Usa la aerolínea predominante y duración promedio para esa ruta/clase.  
-   - Muestra:
-     - Rangos de tarifas estimadas por franjas horarias de salida.  
-     - Rangos de tarifas estimadas por franjas de llegada.  
-     - Rangos por cantidad de escalas.  
-     - Curva de tarifa estimada vs. `Days_left`.  
+La app incluye cinco pestañas:
 
-2. **What-if**  
-   - Inputs mínimos: fecha base, origen, destino, clase.  
-   - Usa promedios históricos para aerolínea y duración.  
-   - Genera varios escenarios (base, cambiar días de anticipación, cambiar escalas, distintas franjas de salida/llegada) y los compara en una tabla.
+1. **Predicción** – calcula rangos por horarios de salida/llegada, escalas, aerolínea y curva vs `Days_left`.  
+2. **What-if** – escenarios comparativos (cambiar anticipación, escalas, franjas).  
+3. **Casos típicos** – presets para viajes de negocios, planificados o escapadas.  
+4. **Predicción completa** – formulario avanzado con todos los parámetros.  
+5. **Análisis del dataset** – histogramas, top rutas/aerolíneas y scatter `Duration_in_hours` vs `Fare`.
 
-3. **Análisis del dataset**  
-   - Histogramas de `Fare` y `Days_left`.  
-   - Top rutas y aerolíneas por cantidad de vuelos.  
-   - Gráfico de dispersión `Duration_in_hours` vs `Fare` coloreado por escalas.
-
-> Importante: la app asume que la API está corriendo en `http://localhost:8000`. Podés cambiar la URL base desde la barra lateral de Streamlit si fuera necesario.
-> En la versión actual, la app carga el modelo directamente desde `artifacts/model_pipeline.joblib`, sin necesidad de levantar una API.
+> Si elegís “API FastAPI”, asegurate de tener `uvicorn api.main:app --reload` corriendo (ver sección 7). En modo local, no se requiere la API.
 
 ---
 
-## 8. Flujo completo resumido
+## 7. Servir la API FastAPI
+
+Con el entorno virtual activo y el modelo generado:
+
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+
+Endpoints principales:
+
+- `GET /health` → chequea estado y versión del artefacto cargado.
+- `POST /predict` → recibe el mismo payload que usa la app (campos como `Date_of_journey`, `Airline`, `Total_stops`, etc.) y devuelve la tarifa estimada + metadata.
+
+Ejemplo rápido:
+
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "Date_of_journey": "2024-07-01",
+    "Journey_day": "Monday",
+    "Airline": "Indigo",
+    "Class": "Economy",
+    "Source": "Delhi",
+    "Departure": "6 AM - 12 PM",
+    "Total_stops": "non-stop",
+    "Arrival": "12 PM - 6 PM",
+    "Destination": "Mumbai",
+    "Duration_in_hours": 2.3,
+    "Days_left": 15
+  }'
+```
+
+La API comparte el mismo `LocalModelService` que la app, por lo que cualquier artefacto nuevo generado por el notebook puede desplegarse sin cambios adicionales.
+
+---
+
+## 8. Propuesta de despliegue
+
+| Componente | Responsabilidad | Comando base | Hosting sugerido |
+| --- | --- | --- | --- |
+| Notebook (`tp3_modelado_vuelos.ipynb`) | Entrenamiento batch, exporta `artifacts/` y `reports/` | `jupyter lab` / `papermill` | EC2 puntual, Workbench o GitHub Actions + S3 |
+| API (`api/main.py`) | Inferencia online (`POST /predict`) | `uvicorn api.main:app --port 8000` | Contenedor (ECS/K8s) detrás de ALB/API Gateway |
+| Frontend (`frontend/app.py`) | Experiencia interactiva para analistas/usuarios finales | `streamlit run frontend/app.py` | Streamlit Cloud, EC2 con Nginx o S3+CloudFront (via Streamlit Sharing) |
+| Artefactos (`artifacts/`, `reports/`) | Versionado del modelo y métricas | n/a | S3 / GCS + control de versiones |
+
+Escalabilidad sugerida:
+
+- **Inferencia**: autoscaling horizontal + caché en Redis para rutas populares. Cada pod carga el `LocalModelService`.
+- **Entrenamiento**: job mensual/semanal que ejecuta el notebook (o script equivalente) y publica métricas; sólo promueve nuevas versiones si superan el MAE anterior.
+- **Observabilidad**: registrar MAE por ruta y buckets de `Days_left`, alertar si se sale del intervalo bootstrap calculado en el notebook.
+
+---
+
+## 9. Flujo completo resumido
 
 1. Clonar/abrir el proyecto y ubicarse en la carpeta raíz.  
 2. Crear y activar el entorno virtual:
@@ -153,11 +206,15 @@ La app tiene tres pestañas:
    pip install --upgrade pip setuptools wheel
    pip install -r requirements.txt
    ```
-4. Abrir y ejecutar el notebook `tp3_modelado_vuelos.ipynb` hasta guardar `artifacts/model_pipeline.joblib`.  
-5. Levantar el frontend:
+4. Abrir y ejecutar el notebook `tp3_modelado_vuelos.ipynb` hasta guardar `artifacts/model_pipeline.joblib` + `reports/model_metrics.json`.  
+5. (Opcional) Levantar la API:
+   ```bash
+   uvicorn api.main:app --reload
+   ```
+6. Levantar el frontend:
    ```bash
    streamlit run frontend/app.py
    ```
-6. Probar la app en el navegador, explorando las pestañas de Predicción, What-if y Análisis del dataset.
+7. Probar la app en el navegador, explorando las pestañas de Predicción, What-if, Casos, Predicción completa y Análisis.
 
 Con estos pasos, cualquier persona debería poder reproducir el entrenamiento, validar el modelo y usar el prototipo completo en su máquina local.

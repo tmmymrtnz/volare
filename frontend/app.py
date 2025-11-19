@@ -2,103 +2,30 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-import sys
 
-import joblib
+import httpx
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import streamlit as st
 
+from volare_model.serving import LocalModelService
+
 
 DATA_PATH = Path(__file__).resolve().parents[1] / "dataset" / "Cleaned_dataset.csv"
 MODEL_PATH = Path(__file__).resolve().parents[1] / "artifacts" / "model_pipeline.joblib"
-
-
-# Definiciones replicadas para compatibilidad con el pipeline serializado
-DEPARTURE_ORDER = {
-    "Before 6 AM": 0,
-    "6 AM - 12 PM": 1,
-    "12 PM - 6 PM": 2,
-    "After 6 PM": 3,
-}
-ARRIVAL_ORDER = DEPARTURE_ORDER.copy()
-JOURNEY_DAY_MAP = {
-    "Monday": 0,
-    "Tuesday": 1,
-    "Wednesday": 2,
-    "Thursday": 3,
-    "Friday": 4,
-    "Saturday": 5,
-    "Sunday": 6,
-}
-
-
-def _parse_total_stops(value):
-    if pd.isna(value):
-        return np.nan
-    value = str(value).lower().strip()
-    if "non" in value:
-        return 0
-    digits = "".join(ch for ch in value if ch.isdigit())
-    return float(digits) if digits else np.nan
-
-
-class FeatureGenerator:
-    def fit(self, X, y=None):
-        return self
-
-    def transform(self, X):
-        df_feat = X.copy()
-        if "Date_of_journey" in df_feat.columns:
-            dates = pd.to_datetime(df_feat["Date_of_journey"], errors="coerce")
-            df_feat["month"] = dates.dt.month
-            df_feat["journey_weekday"] = dates.dt.weekday
-            df_feat["is_weekend"] = (dates.dt.weekday >= 5).astype(int)
-        else:
-            df_feat["month"] = np.nan
-            df_feat["journey_weekday"] = np.nan
-            df_feat["is_weekend"] = np.nan
-
-        if "Journey_day" in df_feat.columns:
-            weekday_from_text = df_feat["Journey_day"].map(JOURNEY_DAY_MAP)
-            df_feat["journey_weekday"] = df_feat["journey_weekday"].fillna(weekday_from_text)
-            df_feat["is_weekend"] = df_feat["is_weekend"].fillna((weekday_from_text >= 5).astype(float))
-
-        df_feat["departure_code"] = df_feat["Departure"].map(DEPARTURE_ORDER)
-        df_feat["arrival_code"] = df_feat["Arrival"].map(ARRIVAL_ORDER)
-
-        df_feat["total_stops_num"] = df_feat["Total_stops"].apply(_parse_total_stops)
-        df_feat["is_nonstop"] = (df_feat["total_stops_num"] == 0).astype(int)
-
-        df_feat["Duration_in_hours"] = pd.to_numeric(df_feat["Duration_in_hours"], errors="coerce")
-        df_feat["Days_left"] = pd.to_numeric(df_feat["Days_left"], errors="coerce")
-        df_feat["duration_per_stop"] = df_feat["Duration_in_hours"] / (df_feat["total_stops_num"] + 1)
-
-        df_feat["is_last_minute"] = (df_feat["Days_left"] <= 3).astype(int)
-        df_feat["is_early_booking"] = (df_feat["Days_left"] >= 60).astype(int)
-
-        df_feat["route"] = (
-            df_feat["Source"].fillna("Desconocido")
-            + "-"
-            + df_feat["Destination"].fillna("Desconocido")
-        )
-
-        return df_feat
+DEFAULT_API_URL = "http://localhost:8000"
 
 
 @st.cache_resource(show_spinner=False)
-def load_model():
+def load_model_service():
     if not MODEL_PATH.exists():
         raise FileNotFoundError(
             f"No se encontró el modelo entrenado en {MODEL_PATH}. "
             "Ejecutá el notebook tp3_modelado_vuelos.ipynb para generar el artefacto."
         )
-    # Registrar FeatureGenerator en __main__ para compatibilidad con el pickle generado desde notebook
-    sys.modules.setdefault("__main__", sys.modules[__name__])
-    setattr(sys.modules["__main__"], "FeatureGenerator", FeatureGenerator)
-    return joblib.load(MODEL_PATH)
+    return LocalModelService(MODEL_PATH)
 
 
 @st.cache_data(show_spinner=False)
@@ -122,7 +49,15 @@ def main():
     )
 
     df = load_reference_data()
-    model = load_model()
+    model_service = load_model_service()
+
+    with st.sidebar:
+        st.header("Configuración de inferencia")
+        inference_mode = st.radio(
+            "Modo", ["Pipeline local", "API FastAPI"], index=0, help="La API debe estar corriendo en el puerto definido."
+        )
+        api_base_url = st.text_input("URL base de la API", value=DEFAULT_API_URL)
+        st.caption(f"Artefacto cargado: {MODEL_PATH.name}")
 
     tab_pred, tab_whatif, tab_cases, tab_manual, tab_analysis = st.tabs(
         ["Predicción", "What-if", "Casos típicos", "Predicción completa", "Análisis del dataset"]
@@ -174,9 +109,16 @@ def main():
 
         def predict_with_payload(payload: dict) -> float | None:
             try:
-                input_df = pd.DataFrame([payload])
-                pred = model.predict(input_df)[0]
-                return float(pred)
+                if inference_mode == "Pipeline local":
+                    return model_service.predict(payload)
+                response = httpx.post(
+                    f"{api_base_url.rstrip('/')}/predict",
+                    json=payload,
+                    timeout=10,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return float(data.get("fare"))
             except Exception as exc:  # pragma: no cover
                 st.error(f"Error al generar la predicción: {exc}")
                 return None
