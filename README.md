@@ -2,7 +2,7 @@
 
 Proyecto del tercer entregable de Ciencia de Datos: entrenamiento de un modelo de regresión para predecir la tarifa de vuelos domésticos en India y despliegue de un prototipo funcional (API + frontend).
 
-El dataset usado es `dataset/Cleaned_dataset.csv`.
+El dataset usado es `dataset/Cleaned_dataset.csv`. **Nota**: Si el archivo no existe localmente, el notebook lo descargará automáticamente desde Google Drive al ejecutarse.
 
 ---
 
@@ -30,7 +30,7 @@ cd /ruta/a/tu/proyecto/cda
 
 Desde aquí deberían verse, entre otros, estos archivos:
 
-- `dataset/Cleaned_dataset.csv`
+- `dataset/` (el archivo `Cleaned_dataset.csv` se descargará automáticamente si no existe)
 - `tp3_modelado_vuelos.ipynb`
 - `api/main.py`
 - `frontend/app.py`
@@ -71,9 +71,17 @@ pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 ```
 
-Esto instalará, entre otras cosas: `pandas`, `scikit-learn`, `xgboost`, `matplotlib`, `seaborn`, `fastapi`, `uvicorn`, `streamlit`, etc.
+Esto instalará, entre otras cosas: `pandas`, `scikit-learn`, `xgboost`, `matplotlib`, `seaborn`, `fastapi`, `uvicorn`, `streamlit`, `requests`, etc.
 
 > Si aparece algún error relacionado con compilación de `matplotlib`, asegurate de haber ejecutado los pasos de Homebrew y Command Line Tools de la sección de requisitos.
+
+### Verificar la instalación
+
+Para confirmar que todo se instaló correctamente:
+
+```bash
+python -c "import pandas, sklearn, xgboost, streamlit, fastapi; print('✓ Dependencias principales instaladas')"
+```
 
 ---
 
@@ -95,8 +103,9 @@ Podés abrirlo con:
 ### Ejecutar las celdas
 
 1. Asegurate de que el kernel seleccionado use el Python del venv (`.venv`).  
-2. Ejecutá todas las celdas, en orden, hasta la sección **“1.13 Guardado del modelo para despliegue”**.  
-3. La celda final de esa sección guarda el pipeline y las métricas consolidadas en:
+2. **Primera ejecución**: Si el archivo `dataset/Cleaned_dataset.csv` no existe, la celda de carga lo descargará automáticamente desde Google Drive (esto puede tomar unos minutos).
+3. Ejecutá todas las celdas, en orden, hasta la sección **"1.14 Guardado del modelo para despliegue"**.  
+4. La celda final de esa sección guarda el pipeline y las métricas consolidadas en:
 
    ```text
    artifacts/model_pipeline.joblib
@@ -218,3 +227,32 @@ Escalabilidad sugerida:
 7. Probar la app en el navegador, explorando las pestañas de Predicción, What-if, Casos, Predicción completa y Análisis.
 
 Con estos pasos, cualquier persona debería poder reproducir el entrenamiento, validar el modelo y usar el prototipo completo en su máquina local.
+
+---
+
+## 10. Troubleshooting
+
+### El notebook no encuentra el dataset
+
+- El notebook descarga automáticamente el dataset desde Google Drive si no existe. Si falla la descarga:
+  - Verificá tu conexión a internet.
+  - Asegurate de que la carpeta `dataset/` exista (se crea automáticamente).
+  - Si el problema persiste, podés descargar manualmente el archivo desde Google Drive usando el ID: `183MypWCEwXVmQyawp6U0DZpcWs8AEsIJ`.
+
+### Error al importar módulos en el notebook
+
+- Verificá que el kernel de Jupyter esté usando el entorno virtual `.venv`.
+- En VS Code: seleccioná el kernel desde la esquina superior derecha del notebook.
+- En Jupyter Lab: `Kernel` → `Change Kernel` → seleccioná el entorno `.venv`.
+
+### La API o el frontend no encuentran el modelo
+
+- Asegurate de haber ejecutado el notebook completo hasta la sección "1.14 Guardado del modelo para despliegue".
+- Verificá que exista el archivo `artifacts/model_pipeline.joblib`.
+- Si el archivo existe pero hay errores, probá regenerarlo ejecutando nuevamente la celda de guardado del modelo.
+
+### Error de puerto en uso
+
+- Si el puerto 8000 (API) o 8501 (Streamlit) está ocupado:
+  - Para la API: `uvicorn api.main:app --reload --port 8001`
+  - Para Streamlit: `streamlit run frontend/app.py --server.port 8502`
